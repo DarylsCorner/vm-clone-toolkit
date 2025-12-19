@@ -1,0 +1,47 @@
+# .gitignore for Azure VM Clone Scripts
+
+# Log files
+*.log
+*.json
+
+# Temporary files
+*.tmp
+/tmp/
+
+# Backup files
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Azure CLI cache
+.azure/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Test outputs
+test-output/
+logs/
+
+# Sensitive data
+secrets.sh
+credentials.sh
+*.env
+.env
+
+# Personal notes
+notes.txt
+TODO.txt
