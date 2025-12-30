@@ -26,8 +26,9 @@ The main cloning script with the following capabilities:
 
 - **Online Cloning**: Creates snapshots without VM shutdown
 - **Complete Disk Cloning**: OS disk + all data disks with LUN and caching preservation
+- **Multi-Instance Provisioning**: Create multiple VMs from a single snapshot operation
 - **Smart Networking**: 
-  - Automatically selects next available private IP
+  - Automatically selects next available private IP(s)
   - Maintains accelerated networking settings
   - Preserves NSG associations
   - Supports availability zone placement
@@ -80,7 +81,7 @@ chmod +x install-monitoring-extension.sh
 
 ## 📖 Usage
 
-### Basic VM Clone
+### Basic VM Clone (Single Instance)
 
 ```bash
 ./clone-app-server.sh <source-rg> <source-vm-name> <new-vm-name>
@@ -91,26 +92,65 @@ chmod +x install-monitoring-extension.sh
 ./clone-app-server.sh RG-EASTUS sapdl1app01 sapdl1app02
 ```
 
-### Advanced Usage with All Parameters
+### Multi-Instance VM Provisioning
+
+Create multiple VMs from a single snapshot operation for improved efficiency:
 
 ```bash
+./clone-app-server.sh <source-rg> <source-vm-name> --multi "vm1 vm2 vm3 ..."
+```
+
+**Example:**
+```bash
+# Create 3 VMs from sapdl1app01
+./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04"
+```
+
+**Benefits:**
+- Snapshots created once and reused across all VMs
+- IP addresses allocated upfront for all VMs
+- Sequential VM creation with clear progress tracking
+- Significantly faster than running script multiple times
+- Individual log files per VM with consolidated summary
+
+**Performance:**
+- Single VM: ~8-10 minutes
+- Multi-instance: ~5-7 minutes per VM after initial snapshot
+- Example: 3 VMs in ~17-22 minutes vs ~24-30 minutes separately
+
+### Advanced Usage with All Parameters
+
+**Single VM:**
+```bash
 ./clone-app-server.sh <source-rg> <source-vm-name> <new-vm-name> \
+  [target-rg] [location] [vm-size] [set-hostname] [log-dir]
+```
+
+**Multi-Instance:**
+```bash
+./clone-app-server.sh <source-rg> <source-vm-name> --multi "vm1 vm2 vm3" \
   [target-rg] [location] [vm-size] [set-hostname] [log-dir]
 ```
 
 **Parameters:**
 - `source-rg` - Source resource group (required)
 - `source-vm-name` - Source VM name (required)
-- `new-vm-name` - Target VM name (required)
+- `new-vm-name` - Target VM name (required for single-instance)
+- `--multi "vm1 vm2 ..."` - Space-separated list of VM names (required for multi-instance)
 - `target-rg` - Target resource group (optional, defaults to source-rg)
 - `location` - Azure region (optional, defaults to source VM location)
 - `vm-size` - VM size (optional, defaults to source VM size)
 - `set-hostname` - Set hostname in guest OS (default: true, set to false to skip)
 - `log-dir` - Log directory path (optional, default: current directory)
 
-**Example:**
+**Examples:**
 ```bash
+# Single VM with custom settings
 ./clone-app-server.sh RG-EASTUS sapdl1app01 sapdl1app02 \
+  RG-EASTUS eastus Standard_D4s_v5 true ./logs
+
+# Multi-instance with custom settings
+./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "app02 app03 app04" \
   RG-EASTUS eastus Standard_D4s_v5 true ./logs
 ```
 
@@ -174,16 +214,33 @@ The script automatically detects and blocks cloning of VMs with shared disks (ma
 - `set -euo pipefail` ensures immediate exit on any error
 - Comprehensive error messages with context
 - JSON logging of both successful and failed operations
+- Multi-instance mode: continues with remaining VMs if one fails
 - Rollback not automatic - failed resources remain for troubleshooting
+
+### Multi-Instance Validations
+- **Duplicate Name Check**: Prevents creating VMs with duplicate names
+- **IP Availability**: Validates subnet has enough IPs before starting
+- **Sequential Processing**: Creates VMs one at a time for reliable error tracking
+- **Per-VM Status**: Independent success/failure tracking for each VM
 
 ## 📊 Logging
 
 ### Log File Format
-Each clone operation generates a JSON log file:
 
+**Single Instance:**
 ```bash
-clone-<new-vm-name>-<timestamp>.json
+<new-vm-name>-clone-<timestamp>.json
 ```
+
+**Multi-Instance:**
+```bash
+<vm-name>-clone-<timestamp>.json  # One log per VM
+```
+
+Example: Creating 3 VMs generates 3 separate log files:
+- `sapdl1app02-clone-20251230141409.json`
+- `sapdl1app03-clone-20251230141409.json`
+- `sapdl1app04-clone-20251230141409.json`
 
 **Log Contents:**
 ```json
