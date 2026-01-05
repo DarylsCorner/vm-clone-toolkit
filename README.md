@@ -10,7 +10,7 @@ Toolkit for cloning Azure Linux VMs with disk snapshots, accelerated networking,
 
 ## 📋 Overview
 
-This repository contains scripts to safely clone Azure Linux VMs (tested with SLES 15) including:
+This repository contains scripts to safely clone Azure Linux VMs (tested with SLES 15 SP6) including:
 - Complete OS and data disk cloning via snapshots
 - Automatic network configuration with static IP assignment
 - Accelerated networking preservation
@@ -27,26 +27,46 @@ The main cloning script with the following capabilities:
 - **Online Cloning**: Creates snapshots without VM shutdown
 - **Complete Disk Cloning**: OS disk + all data disks with LUN and caching preservation
 - **Multi-Instance Provisioning**: Create multiple VMs from a single snapshot operation
+- **Zone Distribution**: Automatically distributes VMs across availability zones (1 and 3) for high availability
 - **Smart Networking**: 
   - Automatically selects next available private IP(s)
   - Maintains accelerated networking settings
-  - Preserves NSG associations
-  - Supports availability zone placement
-- **Resource Naming**: Matches source VM naming patterns (e.g., `app01423_z1` → `app02423_z1`)
-- **Extension Management**: Automatically installs MonitorX64Linux if present on source VM
+  - Preserves NSG associations, if any
+  - Supports availability zone placement with intelligent rotation
+- **Resource Naming**: Matches source VM naming patterns (e.g., `sapdl1app01-nic` → `sapdl1app02_nic`)
+- **Extension Management**: Automatically installs MonitorX64Linux if present on source VM (with latest update)
 - **Hostname Configuration**: Sets hostname in guest OS to match new VM name (default: enabled)
 - **Safety Gates**: Blocks cloning of VMs with shared disks to prevent cluster conflicts
 - **Comprehensive Logging**: JSON logs with full pre/post configuration metadata
 
 ### validate_aem_monitorx64linux.sh
-Extension health validation script that checks:
+Extension health validation script for MonitorX64Linux (Azure Enhanced Monitoring). Performs comprehensive checks:
 
-- Extension files and manifest presence
-- Running processes and daemons
-- Metrics endpoint availability (port 11812)
-- Legacy PerfCounters (if applicable)
-- Azure Instance Metadata Service integration
-- Optional saposcol detection
+**Critical Checks (Must Pass):**
+- ✅ Extension artifact directory exists (`/var/lib/waagent/Microsoft.AzureCAT.AzureEnhancedMonitoring.MonitorX64Linux-*`)
+- ✅ Handler manifest and configuration files present (`HandlerEnvironment.json`, `HandlerStatus`)
+- ✅ Extension process running (`AzureEnhancedMonitoring -monitor`)
+- ✅ Metrics endpoint responding on port 11812 (`127.0.0.1:11812/azure4sap/metrics`)
+
+**Optional Checks (May Skip):**
+- ⚠️ Legacy PerfCounters directory (`/var/lib/AzureEnhancedMonitor`) - only for older extension versions
+- ⚠️ Azure IMDS EnhancedAccess flag - only relevant for SAP workloads
+- ⚠️ saposcol process - only needed for SAP workloads
+
+**Output Format:**
+- Individual check results with ✔ (pass), ✗ (fail), or ⚠ (skip/warning)
+- Summary table showing pass/skip status for all checks
+- Overall verdict: "All critical checks passed" or specific failures
+
+### validate-vms.sh
+Quick validation script for verifying cloned VM configurations without redeployment:
+
+- Private IP address verification
+- Availability zone assignment
+- VM size confirmation
+- Extension installation status with version
+- Accelerated networking validation
+- Data disk count verification
 
 ### install-monitoring-extension.sh
 Standalone extension installer (now integrated into main clone script, kept for reference)
@@ -75,8 +95,18 @@ cd vm-clone-toolkit
 
 # Make scripts executable (if not already)
 chmod +x clone-app-server.sh
-chmod +x validate_aem_monitorx64linux.sh
-chmod +x install-monitoring-extension.sh
+chmod +x scripts/*.sh
+```
+
+**Directory Structure:**
+```
+vm-clone-toolkit/
+├── clone-app-server.sh          # Main cloning script
+├── scripts/                      # Helper and validation scripts
+│   ├── validate-vms.sh          # Quick VM validation
+│   ├── validate_aem_monitorx64linux.sh  # Extension health check
+│   └── install-monitoring-extension.sh  # Standalone extension installer
+└── README.md
 ```
 
 ## 📖 Usage
@@ -104,19 +134,23 @@ Create multiple VMs from a single snapshot operation for improved efficiency:
 ```bash
 # Create 3 VMs from sapdl1app01
 ./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04"
+
+or 
+
+./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "app02 app03 app04"
 ```
 
 **Benefits:**
 - Snapshots created once and reused across all VMs
 - IP addresses allocated upfront for all VMs
 - Sequential VM creation with clear progress tracking
-- Significantly faster than running script multiple times
 - Individual log files per VM with consolidated summary
+- Automatic zone distribution for high availability (alternates between zones 1 and 3)
 
 **Performance:**
 - Single VM: ~8-10 minutes
-- Multi-instance: ~5-7 minutes per VM after initial snapshot
-- Example: 3 VMs in ~17-22 minutes vs ~24-30 minutes separately
+- Multi-instance: ~7-8 minutes per VM (sequential creation)
+- Example: 4 VMs in ~30 minutes with zone distribution (1→3→1→3)
 
 ### Advanced Usage with All Parameters
 
@@ -154,22 +188,39 @@ Create multiple VMs from a single snapshot operation for improved efficiency:
   RG-EASTUS eastus Standard_D4s_v5 true ./logs
 ```
 
-### Validate Extension Health
+### Validate Cloned VMs (Quick Check)
+
+Use the validation script to verify VM configurations without redeployment:
+
+```bash
+# Validate multiple VMs at once
+bash scripts/validate-vms.sh RG-EASTUS sapdl1app02 sapdl1app03 sapdl1app04
+
+# Output shows for each VM:
+# - Private IP address
+# - Availability zone
+# - VM size
+# - Extension installed with version (e.g., MonitorX64Linux (1.93))
+# - Accelerated networking status
+# - Data disk count
+```
+
+### Validate Extension Health (Detailed)
 
 ```bash
 # From your local machine, run validation inside source VM
 az vm run-command invoke -g RG-EASTUS -n sapdl1app01 \
   --command-id RunShellScript \
-  --scripts "@validate_aem_monitorx64linux.sh"
+  --scripts "@scripts/validate_aem_monitorx64linux.sh"
 
 # From your local machine, run validation inside cloned VM
 az vm run-command invoke -g RG-EASTUS -n sapdl1app02 \
   --command-id RunShellScript \
-  --scripts "@validate_aem_monitorx64linux.sh"
+  --scripts "@scripts/validate_aem_monitorx64linux.sh"
 
 # Alternative: SSH into VM and run directly
 # Copy script to VM first
-scp -i ~/.ssh/your-key.pem validate_aem_monitorx64linux.sh azureuser@<vm-ip-or-hostname>:~
+scp -i ~/.ssh/your-key.pem scripts/validate_aem_monitorx64linux.sh azureuser@<vm-ip-or-hostname>:~
 
 # SSH into VM
 ssh -i ~/.ssh/your-key.pem azureuser@<vm-ip-or-hostname>
@@ -242,40 +293,6 @@ Example: Creating 3 VMs generates 3 separate log files:
 - `sapdl1app03-clone-20251230141409.json`
 - `sapdl1app04-clone-20251230141409.json`
 
-**Log Contents:**
-```json
-{
-  "timestamp": "20251219193000",
-  "source": {
-    "resourceGroup": "RG-EASTUS",
-    "vmName": "sapdl1app01",
-    "location": "eastus",
-    "vmSize": "Standard_D2s_v3"
-  },
-  "target": {
-    "resourceGroup": "RG-EASTUS",
-    "vmName": "sapdl1app02",
-    "vmSize": "Standard_D2s_v3"
-  },
-  "preConfig": {
-    "osDisk": "...",
-    "dataDisks": [...],
-    "networkInterface": "...",
-    "acceleratedNetworking": true
-  },
-  "postConfig": {
-    "vmId": "...",
-    "privateIP": "10.0.0.4",
-    "monitoringExtension": "Succeeded"
-  },
-  "safety": {
-    "sharedDiskCheck": "passed",
-    "findings": []
-  },
-  "status": "completed"
-}
-```
-
 ## 🔧 Script Workflow
 
 ### clone-app-server.sh Process
@@ -283,19 +300,21 @@ Example: Creating 3 VMs generates 3 separate log files:
 1. **Prerequisites Check** - Validates az, jq, python3 availability
 2. **Source VM Discovery** - Fetches complete source VM configuration
 3. **Shared Disk Safety Check** - Validates no shared disks attached
-4. **IP Address Selection** - Calculates next available static IP
-5. **OS Disk Clone** - Creates snapshot → creates new disk
-6. **Data Disk Clone** - Snapshots and recreates all data disks
-7. **NIC Creation** - Creates NIC with static IP and accelerated networking
-8. **VM Creation** - Assembles new VM with all components
-9. **Extension Installation** - Installs MonitorX64Linux if source has it
-10. **Hostname Configuration** - Updates guest hostname (optional)
-11. **Summary & Logging** - Displays results and saves JSON log
+4. **Zone Selection** - Determines availability zone (multi-instance: rotates between 1 and 3)
+5. **IP Address Selection** - Calculates next available static IP(s)
+6. **OS Disk Clone** - Creates snapshot → creates new disk in target zone
+7. **Data Disk Clone** - Snapshots and recreates all data disks in target zone
+8. **NIC Creation** - Creates NIC with static IP and accelerated networking
+9. **VM Creation** - Assembles new VM with all components
+10. **Hostname Configuration** - Updates guest hostname to match VM name
+11. **Extension Installation** - Installs MonitorX64Linux if source has it
+12. **Configuration Validation** - Queries actual VM settings (zone, extension, accelerated networking)
+13. **Summary & Logging** - Displays validated results and saves JSON log
 
 ### Execution Time
-- Small VM (2 disks): ~3-5 minutes
-- Large VM (8+ disks): ~8-12 minutes
-- Time varies based on disk sizes and Azure region load
+- Single VM (2 disks): ~8 minutes
+- Multi-instance (4 VMs, 2 disks each): ~30 minutes total (~7-8 min per VM)
+- Time varies based on disk sizes, Azure region load, and zone distribution
 
 ## 🎯 Use Cases
 
@@ -336,7 +355,7 @@ Example: Creating 3 VMs generates 3 separate log files:
 ### Resource Naming
 - New resources follow source naming patterns via string replacement
 - Pattern: `${SOURCE_NAME/$SOURCE_VM_NAME/$NEW_VM_NAME}`
-- Example: `app01423_z1` becomes `app02423_z1`
+- Example: `app01423-nic` becomes `app02423-nic`
 - Works with NICs, OS disks, and data disks
 
 ### Cleanup After Testing

@@ -99,6 +99,22 @@ else
   TARGET_VM_NAMES=("$3")
 fi
 
+# Normalize VM names: if short names provided (e.g., "app02"), construct full names
+# by extracting the base prefix from source VM name
+declare -a NORMALIZED_VM_NAMES=()
+if [[ "$SOURCE_VM_NAME" =~ ^(.+)(app[0-9]+)$ ]]; then
+  VM_PREFIX="${BASH_REMATCH[1]}"  # e.g., "sapdl1"
+  for vm_name in "${TARGET_VM_NAMES[@]}"; do
+    # If the name doesn't contain the prefix, add it
+    if [[ ! "$vm_name" =~ ^${VM_PREFIX} ]]; then
+      NORMALIZED_VM_NAMES+=("${VM_PREFIX}${vm_name}")
+    else
+      NORMALIZED_VM_NAMES+=("$vm_name")
+    fi
+  done
+  TARGET_VM_NAMES=("${NORMALIZED_VM_NAMES[@]}")
+fi
+
 # Display mode information
 if $MULTI_MODE; then
   echo -e "${CYAN}Multi-instance mode: Creating ${#TARGET_VM_NAMES[@]} VMs${NC}"
@@ -121,9 +137,26 @@ LOG_DIR="${8:-.}"
 mkdir -p "$LOG_DIR"
 
 TS=$(date +%Y%m%d%H%M%S)
+START_TIME=$(date +%s)
 
 # Availability Zone info
-AVAILABILITY_ZONE=$(echo "$VM_JSON" | jq -r '.zones[0] // ""')
+SOURCE_AVAILABILITY_ZONE=$(echo "$VM_JSON" | jq -r '.zones[0] // ""')
+
+# For multi-instance mode, prepare zone rotation
+if $MULTI_MODE && [[ -n "$SOURCE_AVAILABILITY_ZONE" ]]; then
+  # Determine available zones for round-robin (zones 1 and 3 for better availability)
+  if [[ "$SOURCE_AVAILABILITY_ZONE" == "1" ]]; then
+    ZONE_ROTATION=("1" "3")
+  elif [[ "$SOURCE_AVAILABILITY_ZONE" == "3" ]]; then
+    ZONE_ROTATION=("3" "1")
+  else
+    # If source is zone 2, rotate between 2 and 1
+    ZONE_ROTATION=("$SOURCE_AVAILABILITY_ZONE" "1")
+  fi
+  echo -e "${CYAN}Zone rotation enabled: ${ZONE_ROTATION[*]} (alternating)${NC}"
+else
+  AVAILABILITY_ZONE="$SOURCE_AVAILABILITY_ZONE"
+fi
 
 # License type
 LICENSE_TYPE=$(echo "$VM_JSON" | jq -r '.licenseType // ""')
@@ -258,9 +291,9 @@ if [[ -z "$SUBNET_PREFIX" || "$SUBNET_PREFIX" == "null" ]]; then
   exit 1
 fi
 
-# Used IPs from NICs in the subnet's RG
-USED_IPS=$(az network nic list -g "$SUBNET_RG" \
-  --query "[?ipConfigurations[0].subnet.id=='$SUBNET_ID'].ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
+# Used IPs from ALL NICs in this subnet (across all RGs in subscription)
+echo -e "${CYAN}  → Checking IP allocations across subscription...${NC}"
+USED_IPS=$(az network nic list --query "[?ipConfigurations[0].subnet.id=='$SUBNET_ID'].ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
 
 # Calculate required IP count
 IP_COUNT=${#TARGET_VM_NAMES[@]}
@@ -334,6 +367,7 @@ fi
 #############################################
 # 1) Create snapshots (once, reused in multi-mode)
 #############################################
+STEP_START=$(date +%s)
 OS_SNAPSHOT_NAME="${OS_DISK_NAME}-os-snap-${TS}"
 
 if $MULTI_MODE; then
@@ -398,12 +432,17 @@ fi
 if $MULTI_MODE; then
   echo -e "${GREEN}✓ Snapshots created and ready for reuse${NC}"
 fi
+STEP_END=$(date +%s)
+STEP_ELAPSED=$((STEP_END - STEP_START))
+echo -e "${CYAN}  ⏱ Step 1: ${STEP_ELAPSED}s${NC}"
 
 #############################################
 # Arrays to track created resources
 #############################################
 declare -a ALL_CREATED_VMS=()
 declare -a ALL_VM_IPS=()
+declare -a ALL_VM_ZONES=()
+declare -a ALL_VM_EXTENSIONS=()
 declare -a ALL_VM_STATUSES=()
 declare -a ALL_LOG_FILES=()
 
@@ -414,16 +453,44 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
   NEW_VM_NAME="${TARGET_VM_NAMES[$VM_IDX]}"
   NEXT_IP="${ALLOCATED_IPS[$VM_IDX]}"
   
+  # Initialize variables for this VM
+  NEW_DATA_DISK_IDS=()
+  NEW_DATA_DISK_LUNS=()
+  NEW_DATA_DISK_CACHING=()
+  HOSTNAME_EXTENSION_STATUS="Not set"
+  EXTENSION_STATUS="Not installed"
+  
+  # Determine availability zone for this VM
+  if $MULTI_MODE && [[ -n "$SOURCE_AVAILABILITY_ZONE" ]]; then
+    # Round-robin: alternate between zones
+    ZONE_INDEX=$((VM_IDX % ${#ZONE_ROTATION[@]}))
+    AVAILABILITY_ZONE="${ZONE_ROTATION[$ZONE_INDEX]}"
+  else
+    # Single instance mode: use source zone
+    AVAILABILITY_ZONE="$SOURCE_AVAILABILITY_ZONE"
+  fi
+  
   if $MULTI_MODE; then
     echo
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}Creating VM $((VM_IDX + 1)) of ${#TARGET_VM_NAMES[@]}: $NEW_VM_NAME${NC}"
+    if [[ -n "$AVAILABILITY_ZONE" ]]; then
+      echo -e "${CYAN}Target Zone: $AVAILABILITY_ZONE${NC}"
+    fi
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
   fi
   
   # Calculate resource names for this VM using pattern matching
   NEW_OS_DISK_NAME="${OS_DISK_NAME/$SOURCE_VM_NAME/$NEW_VM_NAME}"
   NEW_NIC_NAME="${NIC_NAME/$SOURCE_VM_NAME/$NEW_VM_NAME}"
+  
+  # Update NIC zone suffix if zone changed and NIC has zone suffix
+  if [[ -n "$AVAILABILITY_ZONE" ]] && [[ -n "$SOURCE_AVAILABILITY_ZONE" ]] && [[ "$AVAILABILITY_ZONE" != "$SOURCE_AVAILABILITY_ZONE" ]]; then
+    # If NIC name has zone suffix pattern like "_z1", update it
+    if [[ "$NEW_NIC_NAME" =~ (.+)_z[0-9]+$ ]]; then
+      NEW_NIC_NAME="${BASH_REMATCH[1]}_z${AVAILABILITY_ZONE}"
+    fi
+  fi
   
   #############################################
   # 2) Create OS disk from snapshot
@@ -432,6 +499,7 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
   #############################################
   # 2) Create OS disk from snapshot
   #############################################
+  STEP_START=$(date +%s)
   echo -e "${BLUE}[2/8] Creating OS disk from snapshot...${NC}"
   echo -e "${YELLOW}  → Creating $NEW_OS_DISK_NAME...${NC}"
 
@@ -451,10 +519,13 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
       --query "id" -o tsv 2>/dev/null
   )
   echo -e "${GREEN}  ✓ OS disk created: $NEW_OS_DISK_NAME${NC}"
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 2: $((STEP_END - STEP_START))s${NC}"
 
   #############################################
   # 3) Create data disks from snapshots
   #############################################
+  STEP_START=$(date +%s)
   declare -a NEW_DATA_DISK_IDS=()
   declare -a NEW_DATA_DISK_NAMES=()
   declare -a NEW_DATA_DISK_LUNS=()
@@ -500,10 +571,13 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
   else
     echo "No data disks to create."
   fi
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 3: $((STEP_END - STEP_START))s${NC}"
 
   #############################################
   # 4) Create NIC with STATIC private IP
   #############################################
+  STEP_START=$(date +%s)
   NSG_ARG=()
   if [[ -n "$NSG_ID" ]]; then
     NSG_ARG=(--network-security-group "$NSG_ID")
@@ -516,26 +590,40 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
 
   echo -e "${BLUE}[4/8] Creating network interface...${NC}"
   echo -e "${YELLOW}  → Creating $NEW_NIC_NAME with IP $NEXT_IP...${NC}"
-  NEW_NIC_ID=$(
-    az network nic create \
-      -g "$TARGET_RG" \
-      -n "$NEW_NIC_NAME" \
-      --location "$LOCATION" \
-      --subnet "$SUBNET_ID" \
-      --private-ip-address "$NEXT_IP" \
-      "${NSG_ARG[@]}" \
-      "${ACCEL_NET_ARG[@]}" \
-      --only-show-errors \
-      --query "id" -o tsv 2>/dev/null
-  )
+  
+  # Build NIC create command
+  NIC_CMD="az network nic create -g \"$TARGET_RG\" -n \"$NEW_NIC_NAME\" --location \"$LOCATION\" --subnet \"$SUBNET_ID\" --private-ip-address \"$NEXT_IP\""
+  if [[ -n "$NSG_ID" ]]; then
+    NIC_CMD="$NIC_CMD --network-security-group \"$NSG_ID\""
+  fi
+  if [[ "$ACCELERATED_NETWORKING" == "true" ]]; then
+    NIC_CMD="$NIC_CMD --accelerated-networking true"
+  fi
+  NIC_CMD="$NIC_CMD -o none"
+  
+  # Create NIC
+  if ! eval "$NIC_CMD" 2>/dev/null; then
+    echo -e "${RED}  ✗ Failed to create NIC $NEW_NIC_NAME with IP $NEXT_IP${NC}"
+    echo -e "${RED}    IP may already be in use or there may be a network configuration issue${NC}"
+    exit 1
+  fi
+  
+  # Query NIC ID after creation
+  NEW_NIC_ID=$(az network nic show -g "$TARGET_RG" -n "$NEW_NIC_NAME" --query id -o tsv 2>/dev/null)
+  
+  if [[ -z "$NEW_NIC_ID" ]]; then
+    echo -e "${RED}  ✗ Failed to retrieve NIC ID for $NEW_NIC_NAME${NC}"
+    exit 1
+  fi
+  
   echo -e "${GREEN}  ✓ NIC created with static IP: $NEXT_IP${NC}"
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 4: $((STEP_END - STEP_START))s${NC}"
 
   #############################################
   # 5) Create new VM from cloned OS disk
   #############################################
-  #############################################
-  # 5) Create new VM from cloned OS disk
-  #############################################
+  STEP_START=$(date +%s)
   echo -e "${BLUE}[5/8] Creating virtual machine...${NC}"
   if [[ -n "$AVAILABILITY_ZONE" ]]; then
     echo -e "${YELLOW}  → Creating $NEW_VM_NAME ($VM_SIZE) in zone $AVAILABILITY_ZONE...${NC}"
@@ -553,7 +641,7 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
     LICENSE_ARG=(--license-type "$LICENSE_TYPE")
   fi
 
-  az vm create \
+  VM_CREATE_OUTPUT=$(az vm create \
     -g "$TARGET_RG" \
     -n "$NEW_VM_NAME" \
     --attach-os-disk "$NEW_OS_DISK_NAME" \
@@ -562,80 +650,56 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
     --nics "$NEW_NIC_NAME" \
     "${ZONE_ARG_VM[@]}" \
     "${LICENSE_ARG[@]}" \
-    --only-show-errors \
-    >/dev/null 2>&1
-  echo -e "${GREEN}  ✓ VM created: $NEW_VM_NAME${NC}"
-
-  NEW_VM_ID=$(az vm show -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "id" -o tsv)
-
-  # Wait for VM to be fully provisioned and running
-  echo -e "${YELLOW}  → Waiting for VM to be fully ready...${NC}"
-  WAIT_COUNT=0
-  MAX_WAIT=90  # 180 seconds max (3 minutes)
-  VM_READY=false
-
-  while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    VM_STATE=$(az vm get-instance-view -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "instanceView.statuses[1].displayStatus" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "")
-    if [[ "$VM_STATE" == "VM running" ]]; then
-      echo -e "${GREEN}  ✓ VM is running and ready${NC}"
-      VM_READY=true
-      break
-    fi
-    # Show progress indicator every 30 seconds
-    if [ $((WAIT_COUNT % 15)) -eq 0 ] && [ $WAIT_COUNT -gt 0 ]; then
-      echo -e "${YELLOW}    Waiting... ($((WAIT_COUNT * 2))s elapsed)${NC}"
-    fi
-    WAIT_COUNT=$((WAIT_COUNT + 1))
-    sleep 2
-  done
-
-  # Final check before giving up
-  if [ "$VM_READY" = false ]; then
-    VM_STATE=$(az vm get-instance-view -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "instanceView.statuses[1].displayStatus" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "")
-    if [[ "$VM_STATE" == "VM running" ]]; then
-      echo -e "${GREEN}  ✓ VM is running and ready (caught on final check)${NC}"
-      VM_READY=true
-    else
-      echo -e "${RED}  ✗ ERROR: VM did not reach running state after $((MAX_WAIT * 2)) seconds${NC}"
-      echo -e "${YELLOW}    Current state: '$VM_STATE'${NC}"
-      ALL_CREATED_VMS+=("$NEW_VM_NAME")
-      ALL_VM_IPS+=("$NEXT_IP")
-      ALL_VM_STATUSES+=("Failed: VM not running")
-      continue
-    fi
+    --no-wait 2>&1)
+  
+  VM_CREATE_EXIT=$?
+  if [ $VM_CREATE_EXIT -ne 0 ]; then
+    echo -e "${RED}  ✗ VM creation failed${NC}"
+    echo -e "${YELLOW}  Error: $VM_CREATE_OUTPUT${NC}"
+    ALL_CREATED_VMS+=("$NEW_VM_NAME")
+    ALL_VM_IPS+=("$NEXT_IP")
+    ALL_VM_STATUSES+=("Failed: VM creation error")
+    continue
   fi
+  echo -e "${GREEN}  ✓ VM creation initiated: $NEW_VM_NAME${NC}"
 
-  #############################################
-  # 6) Set hostname in guest (before disk attachment to avoid DNS conflicts)
-  #############################################
-  HOSTNAME_EXTENSION_STATUS="skipped"
+  NEW_VM_ID=$(az vm show -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "id" -o tsv 2>/dev/null || echo "")
+
+  # Wait for VM Agent and set hostname immediately to avoid DNS conflicts
   if [[ "$SET_HOSTNAME" == "true" || "$SET_HOSTNAME" == "True" ]]; then
-    echo -e "${BLUE}[6/8] Setting hostname in guest OS...${NC}"
-    echo -e "${YELLOW}  → Running hostname change script...${NC}"
-
-    HOSTNAME_OUTPUT=$(az vm run-command invoke \
-      -g "$TARGET_RG" \
-      -n "$NEW_VM_NAME" \
-      --command-id RunShellScript \
-      --scripts "sudo hostnamectl set-hostname $NEW_VM_NAME && if grep -q '^127.0.1.1' /etc/hosts; then sudo sed -i 's/^127.0.1.1.*/127.0.1.1 $NEW_VM_NAME/' /etc/hosts; else echo '127.0.1.1 $NEW_VM_NAME' | sudo tee -a /etc/hosts; fi && echo 'Hostname set to:' && hostname" \
-      --only-show-errors \
-      --query "value[0].message" -o tsv 2>&1)
-
-    if echo "$HOSTNAME_OUTPUT" | grep -q "$NEW_VM_NAME"; then
-      HOSTNAME_EXTENSION_STATUS="applied"
-      echo -e "${GREEN}  ✓ Hostname set to: $NEW_VM_NAME${NC}"
-    else
-      HOSTNAME_EXTENSION_STATUS="failed"
-      echo -e "${RED}  ✗ ERROR: Hostname update failed${NC}"
-      echo -e "${YELLOW}  Output: $HOSTNAME_OUTPUT${NC}"
+    echo -e "${YELLOW}  → Waiting for VM Agent and setting hostname...${NC}"
+    AGENT_WAIT=0
+    while [ $AGENT_WAIT -lt 90 ]; do
+      AGENT_STATUS=$(az vm get-instance-view -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "instanceView.vmAgent.statuses[0].displayStatus" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "")
+      if [[ "$AGENT_STATUS" == "Ready" ]]; then
+        # Set hostname immediately
+        az vm run-command invoke \
+          -g "$TARGET_RG" \
+          -n "$NEW_VM_NAME" \
+          --command-id RunShellScript \
+          --scripts "sudo hostnamectl set-hostname $NEW_VM_NAME && if grep -q '^127.0.1.1' /etc/hosts; then sudo sed -i 's/^127.0.1.1.*/127.0.1.1 $NEW_VM_NAME/' /etc/hosts; else echo '127.0.1.1 $NEW_VM_NAME' | sudo tee -a /etc/hosts; fi" \
+          --only-show-errors >/dev/null 2>&1
+        echo -e "${GREEN}  ✓ Hostname set to: $NEW_VM_NAME${NC}"
+        break
+      fi
+      sleep 2
+      AGENT_WAIT=$((AGENT_WAIT + 1))
+    done
+    
+    if [ $AGENT_WAIT -ge 90 ]; then
+      echo -e "${YELLOW}  ⚠ VM Agent not ready yet, hostname will be set during verification${NC}"
     fi
   fi
 
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 5: $((STEP_END - STEP_START))s${NC}"
+
   #############################################
-  # 7) Attach cloned data disks
+  # 6) Attach cloned data disks
   #############################################
+  STEP_START=$(date +%s)
   if [[ "${#NEW_DATA_DISK_IDS[@]}" -gt 0 ]]; then
-    echo -e "${BLUE}[7/8] Attaching ${#NEW_DATA_DISK_IDS[@]} data disk(s)...${NC}"
+    echo -e "${BLUE}[6/8] Attaching ${#NEW_DATA_DISK_IDS[@]} data disk(s)...${NC}"
     for i in "${!NEW_DATA_DISK_IDS[@]}"; do
       LUN="${NEW_DATA_DISK_LUNS[$i]}"
       DISK_ID="${NEW_DATA_DISK_IDS[$i]}"
@@ -679,89 +743,54 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
   else
     echo "No data disks to attach."
   fi
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 6: $((STEP_END - STEP_START))s${NC}"
 
   #############################################
-  # 8) Install MonitorX64Linux Extension
+  # 7) Install extension if source VM has it
   #############################################
-  echo -e "${BLUE}[8/8] Installing Azure Enhanced Monitoring extension...${NC}"
-
+  STEP_START=$(date +%s)
   EXTENSION_NAME="MonitorX64Linux"
   PUBLISHER="Microsoft.AzureCAT.AzureEnhancedMonitoring"
-  EXTENSION_STATUS="Not installed"
-
-  # Check if source VM has the extension
-  SOURCE_HAS_EXT=$(az vm extension show \
-    -g "$SOURCE_RG" \
-    --vm-name "$SOURCE_VM_NAME" \
-    -n "$EXTENSION_NAME" \
-    --query "name" \
-    -o tsv 2>/dev/null || echo "")
-
-  if [[ -z "$SOURCE_HAS_EXT" ]]; then
-    echo -e "${YELLOW}  ⚠ Source VM does not have $EXTENSION_NAME extension, skipping installation${NC}"
-    EXTENSION_STATUS="Not on source VM"
-  else
-    # Check if extension already exists on target
-    EXISTING_EXT=$(az vm extension show \
+  EXTENSION_STATUS="Not required"
+  
+  SOURCE_HAS_EXT=$(az vm extension show -g "$SOURCE_RG" --vm-name "$SOURCE_VM_NAME" -n "$EXTENSION_NAME" --query "name" -o tsv 2>/dev/null || echo "")
+  
+  if [[ -n "$SOURCE_HAS_EXT" ]]; then
+    echo -e "${BLUE}[7/8] Installing extension...${NC}"
+    echo -e "${YELLOW}  → Installing $EXTENSION_NAME...${NC}"
+    
+    az vm extension set \
       -g "$TARGET_RG" \
       --vm-name "$NEW_VM_NAME" \
-      -n "$EXTENSION_NAME" \
-      --query "name" \
-      -o tsv 2>/dev/null || echo "")
-
-    if [[ -n "$EXISTING_EXT" ]]; then
-      echo -e "${YELLOW}  ⚠ Extension already exists, skipping installation${NC}"
-      EXTENSION_STATUS="Already installed"
+      --name "$EXTENSION_NAME" \
+      --publisher "$PUBLISHER" \
+      --only-show-errors \
+      >/dev/null 2>&1
+    
+    EXT_STATUS=$(az vm extension show -g "$TARGET_RG" --vm-name "$NEW_VM_NAME" -n "$EXTENSION_NAME" --query "provisioningState" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "NotFound")
+    
+    if [[ "$EXT_STATUS" == "Succeeded" ]]; then
+      echo -e "${GREEN}  ✓ Extension installed successfully${NC}"
+      EXTENSION_STATUS="Installed"
     else
-      # Install the extension
-      az vm extension set \
-        -g "$TARGET_RG" \
-        --vm-name "$NEW_VM_NAME" \
-        --name "$EXTENSION_NAME" \
-        --publisher "$PUBLISHER" \
-        --only-show-errors \
-        >/dev/null 2>&1
-
-      # Poll for installation completion
-      MAX_WAIT=60
-      WAIT_COUNT=0
-      INSTALL_STATUS="Unknown"
-
-      while [[ $WAIT_COUNT -lt $MAX_WAIT ]]; do
-        INSTALL_STATUS=$(az vm extension show \
-          -g "$TARGET_RG" \
-          --vm-name "$NEW_VM_NAME" \
-          -n "$EXTENSION_NAME" \
-          --query "provisioningState" \
-          -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "Unknown")
-        
-        if [[ "$INSTALL_STATUS" == "Succeeded" ]]; then
-          echo -e "${GREEN}  ✓ Extension installed successfully${NC}"
-          EXTENSION_STATUS="Succeeded"
-          break
-        elif [[ "$INSTALL_STATUS" == "Failed" ]]; then
-          echo -e "${RED}  ✗ Extension installation failed${NC}"
-          EXTENSION_STATUS="Failed"
-          break
-        fi
-        
-        sleep 5
-        WAIT_COUNT=$((WAIT_COUNT + 1))
-      done
-
-      if [[ "$INSTALL_STATUS" != "Succeeded" && "$INSTALL_STATUS" != "Failed" ]]; then
-        echo -e "${YELLOW}  ⚠ Extension installation timed out. Status: $INSTALL_STATUS${NC}"
-        EXTENSION_STATUS="Timeout: $INSTALL_STATUS"
-      fi
+      echo -e "${RED}  ✗ Extension status: $EXT_STATUS${NC}"
+      EXTENSION_STATUS="$EXT_STATUS"
     fi
   fi
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 7: $((STEP_END - STEP_START))s${NC}"
 
   #############################################
-  # 9) Write metadata log (JSON) for this VM
+  # 8) Write metadata log (JSON) for this VM
   #############################################
+  STEP_START=$(date +%s)
   VM_LOG_FILE="${LOG_DIR}/${NEW_VM_NAME}-clone-${TS}.json"
-  echo -e "${BLUE}[9/9] Writing metadata log...${NC}"
+  echo -e "${BLUE}[8/8] Writing metadata log...${NC}"
   echo -e "${YELLOW}  → Generating $VM_LOG_FILE...${NC}"
+
+  # Extension and hostname were already set in previous steps
+  HOSTNAME_EXTENSION_STATUS="Set in step 5"
 
   DISK_OBJS="[]"
   for i in "${!NEW_DATA_DISK_IDS[@]}"; do
@@ -845,10 +874,14 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
     status: "completed"
   }' > "$VM_LOG_FILE"
   echo -e "${GREEN}  ✓ Log file written${NC}"
+  STEP_END=$(date +%s)
+  echo -e "${CYAN}  ⏱ Step 8: $((STEP_END - STEP_START))s${NC}"
   
   # Track this VM's completion
   ALL_CREATED_VMS+=("$NEW_VM_NAME")
   ALL_VM_IPS+=("$NEXT_IP")
+  ALL_VM_ZONES+=("$AVAILABILITY_ZONE")
+  ALL_VM_EXTENSIONS+=("$EXTENSION_STATUS")
   ALL_VM_STATUSES+=("Completed")
   ALL_LOG_FILES+=("$VM_LOG_FILE")
   
@@ -859,11 +892,52 @@ for VM_IDX in "${!TARGET_VM_NAMES[@]}"; do
 done  # End of main VM creation loop
 
 #############################################
-# Final Summary
+# Final Summary - Validate and Display
 #############################################
-#############################################
-# Final Summary
-#############################################
+echo
+echo
+echo -e "${BLUE}Validating VM configurations...${NC}"
+
+# Validate each VM's actual configuration
+for idx in "${!ALL_CREATED_VMS[@]}"; do
+  VM_NAME="${ALL_CREATED_VMS[$idx]}"
+  
+  # Query VM details
+  VM_INFO=$(az vm show -g "$TARGET_RG" -n "$VM_NAME" -d --query "{zone:zones[0],nicId:networkProfile.networkInterfaces[0].id,dataDisks:length(storageProfile.dataDisks)}" -o json 2>/dev/null)
+  ACTUAL_ZONE=$(echo "$VM_INFO" | jq -r '.zone // "none"')
+  NIC_ID=$(echo "$VM_INFO" | jq -r '.nicId // ""')
+  ACTUAL_DATA_DISKS=$(echo "$VM_INFO" | jq -r '.dataDisks // 0')
+  
+  # Check accelerated networking
+  ACTUAL_ACCELNET="false"
+  if [[ -n "$NIC_ID" ]]; then
+    ACTUAL_ACCELNET=$(az network nic show --ids "$NIC_ID" --query "enableAcceleratedNetworking" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "false")
+  fi
+  
+  # Check extension with version
+  EXTENSION_NAME="MonitorX64Linux"
+  ACTUAL_EXT_STATUS="Not required"
+  SOURCE_HAS_EXT=$(az vm extension show -g "$SOURCE_RG" --vm-name "$SOURCE_VM_NAME" -n "$EXTENSION_NAME" --query "name" -o tsv 2>/dev/null || echo "")
+  if [[ -n "$SOURCE_HAS_EXT" ]]; then
+    EXT_INFO=$(az vm extension show -g "$TARGET_RG" --vm-name "$VM_NAME" -n "$EXTENSION_NAME" --query "{status:provisioningState,version:typeHandlerVersion}" -o json 2>/dev/null || echo "{}")
+    EXT_STATE=$(echo "$EXT_INFO" | jq -r '.status // "NotFound"')
+    EXT_VERSION=$(echo "$EXT_INFO" | jq -r '.version // ""')
+    
+    if [[ "$EXT_STATE" == "Succeeded" ]] && [[ -n "$EXT_VERSION" ]] && [[ "$EXT_VERSION" != "null" ]]; then
+      ACTUAL_EXT_STATUS="$EXTENSION_NAME ($EXT_VERSION)"
+    elif [[ "$EXT_STATE" == "Succeeded" ]]; then
+      ACTUAL_EXT_STATUS="$EXTENSION_NAME"
+    else
+      ACTUAL_EXT_STATUS="$EXT_STATE"
+    fi
+  fi
+  
+  # Update arrays with validated values
+  ALL_VM_ZONES[$idx]="$ACTUAL_ZONE"
+  ALL_VM_EXTENSIONS[$idx]="$ACTUAL_EXT_STATUS"
+done
+
+echo -e "${GREEN}✓ Validation complete${NC}"
 echo
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
 if $MULTI_MODE; then
@@ -874,11 +948,22 @@ if $MULTI_MODE; then
   echo -e "  ${BLUE}Total VMs Created${NC}     : ${CYAN}${#ALL_CREATED_VMS[@]}${NC}"
   echo -e "${GREEN}──────────────────────────────────────────────────────${NC}"
   
+  # Query actual accelerated networking from first VM for display
+  if [[ ${#ALL_CREATED_VMS[@]} -gt 0 ]]; then
+    FIRST_VM="${ALL_CREATED_VMS[0]}"
+    FIRST_NIC_ID=$(az vm show -g "$TARGET_RG" -n "$FIRST_VM" --query "networkProfile.networkInterfaces[0].id" -o tsv 2>/dev/null)
+    VALIDATED_ACCELNET=$(az network nic show --ids "$FIRST_NIC_ID" --query "enableAcceleratedNetworking" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "false")
+  fi
+  
   for idx in "${!ALL_CREATED_VMS[@]}"; do
     echo -e "  ${CYAN}VM $((idx + 1)): ${ALL_CREATED_VMS[$idx]}${NC}"
-    echo -e "    Private IP: ${ALL_VM_IPS[$idx]}"
-    echo -e "    Status:     ${ALL_VM_STATUSES[$idx]}"
-    echo -e "    Log File:   ${ALL_LOG_FILES[$idx]}"
+    echo -e "    Private IP:            ${ALL_VM_IPS[$idx]}"
+    echo -e "    Zone:                  ${ALL_VM_ZONES[$idx]}"
+    echo -e "    VM Size:               $VM_SIZE"
+    echo -e "    Extension Installed:   ${ALL_VM_EXTENSIONS[$idx]}"
+    echo -e "    Accelerated Network:   ${VALIDATED_ACCELNET:-$ACCELERATED_NETWORKING}"
+    echo -e "    Data Disks:            $DATA_DISK_COUNT"
+    echo -e "    Log File:              ${ALL_LOG_FILES[$idx]}"
     if [[ $idx -lt $((${#ALL_CREATED_VMS[@]} - 1)) ]]; then
       echo -e "${GREEN}  ────────────────────────────────────────────────────${NC}"
     fi
@@ -888,19 +973,37 @@ if $MULTI_MODE; then
   echo -e "  ${BLUE}Snapshots Created${NC}     : ${CYAN}Reused across all VMs${NC}"
   echo -e "  ${BLUE}Accelerated Network${NC}   : ${CYAN}$ACCELERATED_NETWORKING${NC}"
   echo -e "  ${BLUE}Data Disks per VM${NC}     : ${CYAN}$DATA_DISK_COUNT${NC}"
+  END_TIME=$(date +%s)
+  ELAPSED=$((END_TIME - START_TIME))
+  MINUTES=$((ELAPSED / 60))
+  SECONDS=$((ELAPSED % 60))
+  echo -e "  ${BLUE}Total Time${NC}            : ${CYAN}${MINUTES}m ${SECONDS}s${NC}"
 else
   echo -e "${GREEN}✓ Clone Complete${NC}"
   echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
   NEW_VM_NAME="${ALL_CREATED_VMS[0]}"
   NEXT_IP="${ALL_VM_IPS[0]}"
   VM_LOG_FILE="${ALL_LOG_FILES[0]}"
+  VALIDATED_ZONE="${ALL_VM_ZONES[0]}"
+  VALIDATED_EXT="${ALL_VM_EXTENSIONS[0]}"
+  
+  # Get validated accelerated networking
+  FIRST_NIC_ID=$(az vm show -g "$TARGET_RG" -n "$NEW_VM_NAME" --query "networkProfile.networkInterfaces[0].id" -o tsv 2>/dev/null)
+  VALIDATED_ACCELNET=$(az network nic show --ids "$FIRST_NIC_ID" --query "enableAcceleratedNetworking" -o tsv 2>/dev/null | tr -d '\r' | xargs || echo "false")
   
   echo -e "  ${BLUE}VM Name${NC}               : ${CYAN}$NEW_VM_NAME${NC}"
   echo -e "  ${BLUE}Resource Group${NC}        : ${CYAN}$TARGET_RG${NC}"
   echo -e "  ${BLUE}Private IP${NC}            : ${CYAN}$NEXT_IP${NC} ${GREEN}(static)${NC}"
+  echo -e "  ${BLUE}Zone${NC}                  : ${CYAN}$VALIDATED_ZONE${NC}"
   echo -e "  ${BLUE}VM Size${NC}               : ${CYAN}$VM_SIZE${NC}"
+  echo -e "  ${BLUE}Extension Installed${NC}   : ${CYAN}$VALIDATED_EXT${NC}"
+  echo -e "  ${BLUE}Accelerated Network${NC}   : ${CYAN}$VALIDATED_ACCELNET${NC}"
   echo -e "  ${BLUE}Data Disks${NC}            : ${CYAN}$DATA_DISK_COUNT${NC}"
-  echo -e "  ${BLUE}Accelerated Network${NC}   : ${CYAN}$ACCELERATED_NETWORKING${NC}"
   echo -e "  ${BLUE}Log File${NC}              : ${CYAN}$VM_LOG_FILE${NC}"
+  END_TIME=$(date +%s)
+  ELAPSED=$((END_TIME - START_TIME))
+  MINUTES=$((ELAPSED / 60))
+  SECONDS=$((ELAPSED % 60))
+  echo -e "  ${BLUE}Total Time${NC}            : ${CYAN}${MINUTES}m ${SECONDS}s${NC}"
 fi
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
