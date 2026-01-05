@@ -132,12 +132,8 @@ Create multiple VMs from a single snapshot operation for improved efficiency:
 
 **Example:**
 ```bash
-# Create 3 VMs from sapdl1app01
+# Create 3 VMs from sapdl1app01 (must provide full VM names)
 ./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04"
-
-or 
-
-./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "app02 app03 app04"
 ```
 
 **Benefits:**
@@ -184,7 +180,7 @@ or
   RG-EASTUS eastus Standard_D4s_v5 true ./logs
 
 # Multi-instance with custom settings
-./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "app02 app03 app04" \
+./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04" \
   RG-EASTUS eastus Standard_D4s_v5 true ./logs
 ```
 

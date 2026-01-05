@@ -47,7 +47,7 @@ NC='\033[0m' # No Color
 #
 # Examples:
 #   ./clone-app-server.sh RG-EASTUS sapdl1app01 sapdl1app02
-#   ./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "app02 app03 app04"
+#   ./clone-app-server.sh RG-EASTUS sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04"
 #   ./clone-app-server.sh app-rg appvm01 appvm02-clone app-rg westus2 Standard_D4s_v5 true ./logs
 #############################################
 
@@ -97,22 +97,6 @@ if [[ "$3" == "--multi" ]]; then
   shift 2  # Skip --multi and the name list
 else
   TARGET_VM_NAMES=("$3")
-fi
-
-# Normalize VM names: if short names provided (e.g., "app02"), construct full names
-# by extracting the base prefix from source VM name
-declare -a NORMALIZED_VM_NAMES=()
-if [[ "$SOURCE_VM_NAME" =~ ^(.+)(app[0-9]+)$ ]]; then
-  VM_PREFIX="${BASH_REMATCH[1]}"  # e.g., "sapdl1"
-  for vm_name in "${TARGET_VM_NAMES[@]}"; do
-    # If the name doesn't contain the prefix, add it
-    if [[ ! "$vm_name" =~ ^${VM_PREFIX} ]]; then
-      NORMALIZED_VM_NAMES+=("${VM_PREFIX}${vm_name}")
-    else
-      NORMALIZED_VM_NAMES+=("$vm_name")
-    fi
-  done
-  TARGET_VM_NAMES=("${NORMALIZED_VM_NAMES[@]}")
 fi
 
 # Display mode information
@@ -291,9 +275,9 @@ if [[ -z "$SUBNET_PREFIX" || "$SUBNET_PREFIX" == "null" ]]; then
   exit 1
 fi
 
-# Used IPs from ALL NICs in this subnet (across all RGs in subscription)
+# Used IPs from ALL resources in this subnet (NICs, Load Balancers, Gateways, etc.)
 echo -e "${CYAN}  → Checking IP allocations across subscription...${NC}"
-USED_IPS=$(az network nic list --query "[?ipConfigurations[0].subnet.id=='$SUBNET_ID'].ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
+USED_IPS=$(az network vnet subnet show --ids "$SUBNET_ID" --query "ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
 
 # Calculate required IP count
 IP_COUNT=${#TARGET_VM_NAMES[@]}
