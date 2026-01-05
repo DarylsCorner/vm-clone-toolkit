@@ -275,9 +275,17 @@ if [[ -z "$SUBNET_PREFIX" || "$SUBNET_PREFIX" == "null" ]]; then
   exit 1
 fi
 
-# Used IPs from ALL resources in this subnet (NICs, Load Balancers, Gateways, etc.)
+# Used IPs from ALL resources in this subnet (NICs, Load Balancers, Gateways, Private Endpoints, etc.)
 echo -e "${CYAN}  → Checking IP allocations across subscription...${NC}"
-USED_IPS=$(az network vnet subnet show --ids "$SUBNET_ID" --query "ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
+
+# Get IPs from ipConfigurations (NICs, Load Balancers, Gateways, etc.)
+USED_IPS_IPCONFIG=$(az network vnet subnet show --ids "$SUBNET_ID" --query "ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
+
+# Get IPs from all NICs in the subnet (catches Private Endpoints which may not show in ipConfigurations)
+USED_IPS_NICS=$(az network nic list --query "[?ipConfigurations[0].subnet.id=='$SUBNET_ID'].ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
+
+# Combine and deduplicate all IPs
+USED_IPS=$(echo -e "${USED_IPS_IPCONFIG}\n${USED_IPS_NICS}" | grep -v '^$' | sort -u)
 
 # Calculate required IP count
 IP_COUNT=${#TARGET_VM_NAMES[@]}
