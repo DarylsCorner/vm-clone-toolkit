@@ -278,14 +278,27 @@ fi
 # Used IPs from ALL resources in this subnet (NICs, Load Balancers, Gateways, Private Endpoints, etc.)
 echo -e "${CYAN}  → Checking IP allocations across subscription...${NC}"
 
-# Get IPs from ipConfigurations (NICs, Load Balancers, Gateways, etc.)
+# Get IPs from ipConfigurations (NICs, Gateways, etc.)
 USED_IPS_IPCONFIG=$(az network vnet subnet show --ids "$SUBNET_ID" --query "ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
 
-# Get IPs from all NICs in the subnet (catches Private Endpoints which may not show in ipConfigurations)
+# Get IPs from all NICs in the subnet (catches Private Endpoints)
 USED_IPS_NICS=$(az network nic list --query "[?ipConfigurations[0].subnet.id=='$SUBNET_ID'].ipConfigurations[].privateIPAddress" -o tsv 2>/dev/null || true)
 
+# Get IPs from Load Balancers (they have separate frontend IP configurations)
+USED_IPS_LB=$(az network lb list --query "[].frontendIPConfigurations[?subnet.id=='$SUBNET_ID'].privateIPAddress" -o tsv 2>/dev/null || true)
+
 # Combine and deduplicate all IPs
-USED_IPS=$(echo -e "${USED_IPS_IPCONFIG}\n${USED_IPS_NICS}" | grep -v '^$' | sort -u)
+USED_IPS=$(echo -e "${USED_IPS_IPCONFIG}\n${USED_IPS_NICS}\n${USED_IPS_LB}" | grep -v '^$' | sort -u)
+
+# Debug: Show detected IPs
+if [[ -n "$USED_IPS" ]]; then
+  USED_IP_COUNT=$(echo "$USED_IPS" | wc -l)
+  echo -e "${CYAN}  → Detected $USED_IP_COUNT used IPs in subnet${NC}"
+  echo "$USED_IPS" | head -10 | while read -r ip; do echo -e "${CYAN}     - $ip${NC}"; done
+  if [[ $USED_IP_COUNT -gt 10 ]]; then
+    echo -e "${CYAN}     ... and $((USED_IP_COUNT - 10)) more${NC}"
+  fi
+fi
 
 # Calculate required IP count
 IP_COUNT=${#TARGET_VM_NAMES[@]}
