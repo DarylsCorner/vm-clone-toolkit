@@ -29,7 +29,8 @@ The main cloning script with the following capabilities:
 - **Multi-Instance Provisioning**: Create multiple VMs from a single snapshot operation
 - **Zone Distribution**: Automatically distributes VMs across availability zones (1 and 3) for high availability
 - **Smart Networking**: 
-  - Automatically selects next available private IP(s)
+  - Automatically selects next available private IP(s) with comprehensive detection
+  - Detects IPs used by VMs, Load Balancers, Private Endpoints, and all other network resources
   - Maintains accelerated networking settings
   - Preserves NSG associations, if any
   - Supports availability zone placement with intelligent rotation
