@@ -33,7 +33,7 @@ The main cloning script with the following capabilities:
   - Maintains accelerated networking settings
   - Preserves NSG associations, if any
   - Supports availability zone placement with intelligent rotation
-- **Resource Naming**: Matches source VM naming patterns (e.g., `sapdl1app01-nic` → `sapdl1app02_nic`)
+- **Resource Naming**: Matches source VM naming patterns (e.g., `sapdl1app01-nic` → `sapdl1app02-nic`)
 - **Extension Management**: Automatically installs MonitorX64Linux if present on source VM (with latest update)
 - **Hostname Configuration**: Sets hostname in guest OS to match new VM name (default: enabled)
 - **Safety Gates**: Blocks cloning of VMs with shared disks to prevent cluster conflicts
