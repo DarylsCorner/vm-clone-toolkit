@@ -12,18 +12,50 @@ NC='\033[0m' # No Color
 #############################################
 # install-monitoring-extension.sh
 #
-# Installs Azure Enhanced Monitoring extension (MonitorX64Linux)
+# Installs or updates Azure Enhanced Monitoring extension (MonitorX64Linux)
 # on a Linux VM
-#
-# Usage:
-#   ./install-monitoring-extension.sh <resource-group> <vm-name>
-#
-# Example:
-#   ./install-monitoring-extension.sh RG-EASTUS sapdl1app02
 #############################################
 
+# Show help
+show_help() {
+  cat << EOF
+Azure Enhanced Monitoring Extension Installer
+
+Installs or updates the MonitorX64Linux extension on Azure VMs.
+If an older version exists, it will be updated to the latest version.
+
+Usage: $0 <resource-group> <vm-name>
+
+Arguments:
+  resource-group     Azure resource group containing the VM
+  vm-name           Name of the VM to install/update the extension on
+
+Examples:
+  # Install extension on a VM
+  $0 RG-EASTUS sapdl1app02
+
+  # Update existing extension to latest version
+  $0 RG-PROD sap-prod-app01
+
+Extension Details:
+  Name:      MonitorX64Linux
+  Publisher: Microsoft.AzureCAT.AzureEnhancedMonitoring
+  Purpose:   Azure Enhanced Monitoring for SAP workloads
+
+For more information: https://github.com/DarylsCorner/vm-clone-toolkit
+EOF
+  exit 0
+}
+
+# Parse arguments
+if [[ $# -lt 1 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+  show_help
+fi
+
 if [[ $# -lt 2 ]]; then
+  echo -e "${RED}ERROR: Insufficient arguments${NC}"
   echo -e "${RED}Usage: $0 <resource-group> <vm-name>${NC}"
+  echo "Run '$0 --help' for more information"
   exit 1
 fi
 
@@ -48,15 +80,20 @@ EXISTING_EXT=$(az vm extension show \
   -o tsv 2>/dev/null || echo "")
 
 if [[ -n "$EXISTING_EXT" ]]; then
-  echo -e "${YELLOW}  ⚠ Extension already exists${NC}"
-  echo -e "${YELLOW}  Skipping installation${NC}"
-  exit 0
+  EXISTING_VERSION=$(az vm extension show \
+    -g "$RESOURCE_GROUP" \
+    --vm-name "$VM_NAME" \
+    -n "$EXTENSION_NAME" \
+    --query "typeHandlerVersion" \
+    -o tsv 2>/dev/null || echo "unknown")
+  echo -e "${YELLOW}  ⚠ Extension already exists (version: $EXISTING_VERSION)${NC}"
+  echo -e "${YELLOW}  Will update to latest version if available${NC}"
+else
+  echo -e "${GREEN}  ✓ No existing extension found${NC}"
 fi
 
-echo -e "${GREEN}  ✓ No existing extension found${NC}"
-
-# Install the extension
-echo -e "${BLUE}[2/2] Installing extension...${NC}"
+# Install or update the extension
+echo -e "${BLUE}[2/2] Installing/updating extension...${NC}"
 echo -e "${YELLOW}  → Installing $EXTENSION_NAME...${NC}"
 
 az vm extension set \
@@ -99,7 +136,7 @@ fi
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}✓ Extension Installation Complete${NC}"
+echo -e "${GREEN}✓ Extension Installation/Update Complete${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
 echo -e "  ${BLUE}VM Name${NC}      : ${CYAN}$VM_NAME${NC}"
 echo -e "  ${BLUE}Extension${NC}    : ${CYAN}$EXTENSION_NAME${NC}"

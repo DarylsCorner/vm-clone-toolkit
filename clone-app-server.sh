@@ -56,9 +56,48 @@ need az
 need jq
 need python3
 
+# Show help
+show_help() {
+  cat << EOF
+Azure VM Clone Toolkit - Clone Azure Linux VMs with snapshots and configuration
+
+Usage: $0 <source-rg> <source-vm-name> <new-vm-name|--multi "vm1 vm2 ..."> [target-rg] [location] [vm-size] [set-hostname] [log-dir]
+
+Arguments:
+  source-rg          Source resource group name
+  source-vm-name     Source VM name to clone from
+  new-vm-name        New VM name (single mode)
+  --multi "names"    Multi-instance mode with space-separated full VM names
+  target-rg          Target resource group (default: same as source)
+  location           Azure region (default: same as source)
+  vm-size            VM size (default: same as source)
+  set-hostname       Set hostname in guest OS: true|false (default: true)
+  log-dir            Log directory path (default: current directory)
+
+Examples:
+  # Single VM clone
+  $0 RG-PROD sapdl1app01 sapdl1app02
+
+  # Multi-instance with zone distribution
+  $0 RG-PROD sapdl1app01 --multi "sapdl1app02 sapdl1app03 sapdl1app04"
+
+  # Custom settings
+  $0 RG-PROD sapdl1app01 sapdl1app02 RG-DEV eastus Standard_D4s_v5 true ./logs
+
+For more information: https://github.com/DarylsCorner/vm-clone-toolkit
+EOF
+  exit 0
+}
+
 # Parse arguments
+if [[ $# -lt 1 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+  show_help
+fi
+
 if [[ $# -lt 3 ]]; then
+  echo "ERROR: Insufficient arguments"
   echo "Usage: $0 <source-rg> <source-vm-name> <new-vm-name|--multi \"vm1 vm2 ...\"> [target-rg] [location] [vm-size] [set-hostname] [log-dir]"
+  echo "Run '$0 --help' for more information"
   exit 1
 fi
 

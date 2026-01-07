@@ -112,6 +112,16 @@ vm-clone-toolkit/
 
 ## 📖 Usage
 
+**Getting Help:**
+All scripts include comprehensive `--help` documentation:
+
+```bash
+./clone-app-server.sh --help                    # Main cloning script help
+bash scripts/validate-vms.sh --help             # VM validator help
+bash scripts/install-monitoring-extension.sh --help  # Extension installer help
+bash scripts/validate_aem_monitorx64linux.sh --help  # Extension validator help
+```
+
 ### Basic VM Clone (Single Instance)
 
 ```bash

@@ -1,18 +1,70 @@
 #!/usr/bin/env bash
 # Validate Azure Enhanced Monitoring Extension for SAP (MonitorX64Linux) on a single VM
-# Usage:
-#   sudo bash validate_aem_monitorx64linux.sh
-#
-# Optional environment variables:
-#   AEM_WAAGENT_DIR=/var/lib/waagent
-#   AEM_LEGACY_DIR=/var/lib/AzureEnhancedMonitor
-#   AEM_ENDPOINT_PORT=11812
-#
-# Exit codes:
-#   0 = All critical checks passed
-#   1 = One or more critical checks failed
 
 set -euo pipefail
+
+# Show help
+show_help() {
+  cat << 'EOF'
+Azure Enhanced Monitoring Extension Validator
+
+Validates the MonitorX64Linux extension health on Azure VMs.
+Performs comprehensive checks for extension installation, configuration, and operation.
+
+Usage: sudo bash validate_aem_monitorx64linux.sh [OPTIONS]
+
+Options:
+  --help, -h         Show this help message
+
+Environment Variables (optional):
+  AEM_WAAGENT_DIR    Extension directory (default: /var/lib/waagent)
+  AEM_LEGACY_DIR     Legacy PerfCounters directory (default: /var/lib/AzureEnhancedMonitor)
+  AEM_ENDPOINT_PORT  Metrics endpoint port (default: 11812)
+
+Validation Checks:
+  Critical (Must Pass):
+    - Extension files and directories present
+    - Handler manifest and configuration exist
+    - Extension process running
+    - Metrics endpoint responding
+
+  Optional (May Skip):
+    - Legacy PerfCounters directory (old versions only)
+    - Azure IMDS EnhancedAccess flag (SAP workloads)
+    - saposcol process (SAP workloads only)
+    - Error logs clean
+
+Exit Codes:
+  0 = All critical checks passed
+  1 = One or more critical checks failed
+
+Examples:
+  # Standard validation
+  sudo bash scripts/validate_aem_monitorx64linux.sh
+
+  # Custom waagent directory
+  AEM_WAAGENT_DIR=/custom/path sudo bash scripts/validate_aem_monitorx64linux.sh
+
+Note: This script requires root privileges to check process status and system files.
+
+For more information: https://github.com/DarylsCorner/vm-clone-toolkit
+EOF
+  exit 0
+}
+
+# Parse arguments
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    --help|-h)
+      show_help
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Run '$0 --help' for usage information"
+      exit 1
+      ;;
+  esac
+fi
 
 # ---------- Config ----------
 AEM_WAAGENT_DIR="${AEM_WAAGENT_DIR:-/var/lib/waagent}"
