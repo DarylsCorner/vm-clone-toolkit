@@ -72,24 +72,39 @@ echo ""
 
 # Check if VM already has the extension
 echo -e "${BLUE}[1/2] Checking VM for existing extension...${NC}"
-EXISTING_EXT=$(az vm extension show \
+EXT_INFO=$(az vm extension show \
   -g "$RESOURCE_GROUP" \
   --vm-name "$VM_NAME" \
   -n "$EXTENSION_NAME" \
-  --query "name" \
-  -o tsv 2>/dev/null || echo "")
+  --query "{name:name,version:typeHandlerVersion,status:provisioningState}" \
+  -o json 2>/dev/null || echo "{}")
 
-if [[ -n "$EXISTING_EXT" ]]; then
-  EXISTING_VERSION=$(az vm extension show \
-    -g "$RESOURCE_GROUP" \
-    --vm-name "$VM_NAME" \
-    -n "$EXTENSION_NAME" \
-    --query "typeHandlerVersion" \
-    -o tsv 2>/dev/null || echo "unknown")
-  echo -e "${YELLOW}  ⚠ Extension already exists (version: $EXISTING_VERSION)${NC}"
-  echo -e "${YELLOW}  Will update to latest version if available${NC}"
+EXISTING_EXT=$(echo "$EXT_INFO" | jq -r '.name // ""')
+EXISTING_VERSION=$(echo "$EXT_INFO" | jq -r '.version // "unknown"')
+EXISTING_STATUS=$(echo "$EXT_INFO" | jq -r '.status // "unknown"')
+
+NEEDS_INSTALL=false
+
+if [[ -n "$EXISTING_EXT" ]] && [[ "$EXISTING_EXT" != "null" ]]; then
+  echo -e "${YELLOW}  ⚠ Extension already exists${NC}"
+  echo -e "${YELLOW}    Version: $EXISTING_VERSION${NC}"
+  echo -e "${YELLOW}    Status: $EXISTING_STATUS${NC}"
+  
+  if [[ "$EXISTING_STATUS" != "Succeeded" ]]; then
+    echo -e "${YELLOW}  → Extension status is not 'Succeeded', will reinstall/update${NC}"
+    NEEDS_INSTALL=true
+  else
+    echo -e "${YELLOW}  → Will check for updates and ensure proper provisioning${NC}"
+    NEEDS_INSTALL=true
+  fi
 else
   echo -e "${GREEN}  ✓ No existing extension found${NC}"
+  NEEDS_INSTALL=true
+fi
+
+if [[ "$NEEDS_INSTALL" == "false" ]]; then
+  echo -e "${GREEN}Extension is already installed and in 'Succeeded' state${NC}"
+  exit 0
 fi
 
 # Install or update the extension

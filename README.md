@@ -254,6 +254,7 @@ sudo bash validate_aem_monitorx64linux.sh
 - **Public IP addresses** (not cloned - can be created separately if needed)
 - **Boot diagnostics settings** (not implemented - could be added)
 - **VM insights/monitoring agents** (except MonitorX64Linux - not cloned)
+- **MDE.Linux** (`Microsoft.Azure.AzureDefenderForServers`) — Microsoft Defender for Endpoint is **not cloned**. If the source VM has MDE.Linux installed (e.g. deployed by Terraform), it must be added manually post-clone: `az vm extension set -g <rg> --vm-name <vm> --name MDE.Linux --publisher Microsoft.Azure.AzureDefenderForServers`
 - **Tags** (not implemented - could be added, easily done post-clone)
 - **Backup policies** (not cloned - must be configured separately)
 - **Custom RBAC roles** (assigned to VM resource - not cloned)
