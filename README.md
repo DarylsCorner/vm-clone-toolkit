@@ -72,6 +72,21 @@ Quick validation script for verifying cloned VM configurations without redeploym
 ### install-monitoring-extension.sh
 Standalone extension installer (now integrated into main clone script, kept for reference)
 
+---
+
+### disk-management/
+Scripts for attaching and configuring additional data disks on existing Azure Linux VMs with automated LVM setup. Three scripts for different scenarios:
+
+- **`add-disks-simple.sh`** — Quick disk attach with no LVM (raw disks, let the OS/Ansible configure)
+- **`add-disks-param.sh`** — Parameterised attach + automated LVM, filesystem, and `/etc/fstab` via SSH
+- **`add-disks-layout.sh`** — Predefined multi-disk layout with mixed sizes and multiple volume groups
+
+Key features: auto LUN conflict detection, availability zone awareness, LVM striping across multiple disks, fstab protection.
+
+See [`disk-management/README.md`](disk-management/README.md) for full usage.
+
+> ⚠️ These scripts add disks outside of Terraform state — see the disk-management README for important notes on SDAF-managed VMs.
+
 ## 📦 Prerequisites
 
 ### Required Tools
@@ -107,6 +122,11 @@ vm-clone-toolkit/
 │   ├── validate-vms.sh          # Quick VM validation
 │   ├── validate_aem_monitorx64linux.sh  # Extension health check
 │   └── install-monitoring-extension.sh  # Standalone extension installer
+├── disk-management/              # Data disk add/configure scripts
+│   ├── add-disks-simple.sh      # Quick disk attach (no LVM)
+│   ├── add-disks-param.sh       # Parameterised LVM + auto-mount
+│   ├── add-disks-layout.sh      # Predefined multi-disk layout
+│   └── README.md
 └── README.md
 ```
 
@@ -340,6 +360,8 @@ Example: Creating 3 VMs generates 3 separate log files:
 - Clone SAP application servers
 - Horizontal scaling of app server tiers
 - Test system refreshes from production
+- Add data disks to SAP VMs with HANA-optimised LVM layouts (data/log/shared striping)
+- Expand existing SAP system storage post-deployment
 
 ### Migration & Upgrades
 - Create clones before major changes
