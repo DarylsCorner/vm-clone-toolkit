@@ -123,12 +123,15 @@ Creates and attaches disks, then SSHs into the VM and configures LVM, filesystem
 
 ### 3. `add-disks-layout.sh` — Predefined multi-disk layout with LVM + auto-mount
 
-For complex layouts with mixed disk sizes, names, and multiple volume groups (e.g. replicating an existing VM's disk layout). Edit the `DISK_CONFIGS` array at the top of the script before running.
+For complex layouts with mixed disk sizes, names, and multiple volume groups (e.g. replicating an existing VM's disk layout). Edit the `DISK_CONFIGS` array and VM connection parameters at the top of the script, then pass `--instance` at runtime.
 
 ```bash
-# Edit parameters at the top of the script, then run:
-./add-disks-layout.sh
+# --instance is required — controls disk naming offsets
+./add-disks-layout.sh --instance 1   # DDB1, DDB2, cache1, jobs1
+./add-disks-layout.sh --instance 2   # DDB3, DDB4, cache2, jobs2
 ```
+
+> `--instance` is a required runtime flag to prevent accidental disk name collisions when deploying the same layout to multiple VMs.
 
 **Config format:**
 ```bash
@@ -150,12 +153,12 @@ DISK_CONFIGS=(
 **`LV_PCT` field (optional, default: 100):**  
 Sets the percentage of VG free space allocated to the logical volume. Use this to reserve headroom — e.g. `85` creates the LV at `85%FREE`, leaving ~15% free in the VG (useful for deduplication databases that require minimum free space).
 
-**`VM_INSTANCE` variable:**  
-Controls disk naming offsets when the same layout is deployed to multiple VMs. Set at the top of the script before running:
+**`--instance` flag (required at runtime):**  
+Controls disk naming offsets when the same layout is deployed to multiple VMs. Must be passed on the command line — not hardcoded — to prevent accidental naming conflicts:
 ```bash
-VM_INSTANCE=1   # DDB1, DDB2, cache1, jobs1
-VM_INSTANCE=2   # DDB3, DDB4, cache2, jobs2
-VM_INSTANCE=15  # DDB29, DDB30, cache15, jobs15
+./add-disks-layout.sh --instance 1   # DDB1, DDB2, cache1, jobs1
+./add-disks-layout.sh --instance 2   # DDB3, DDB4, cache2, jobs2
+./add-disks-layout.sh --instance 15  # DDB29, DDB30, cache15, jobs15
 ```
 
 ---

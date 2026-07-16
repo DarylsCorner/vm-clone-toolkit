@@ -256,7 +256,7 @@ REMOTE_SCRIPT+="vgcreate ${VG_NAME} \$DEVICES\n"
 REMOTE_SCRIPT+="lvcreate -l 100%FREE -n ${LV_NAME} ${VG_NAME}\n"
 REMOTE_SCRIPT+="mkfs.${FILESYSTEM} /dev/${VG_NAME}/${LV_NAME}\n"
 REMOTE_SCRIPT+="mkdir -p ${MOUNT_POINT}\n"
-REMOTE_SCRIPT+="UUID=\$(blkid -s UUID -o value /dev/${VG_NAME}/${LV_NAME})\n"
+
 REMOTE_SCRIPT+="if grep -q ' ${MOUNT_POINT} ' /etc/fstab; then\n"
 REMOTE_SCRIPT+="  echo 'WARNING: fstab entry for ${MOUNT_POINT} already exists - skipping fstab update'\n"
 REMOTE_SCRIPT+="else\n"

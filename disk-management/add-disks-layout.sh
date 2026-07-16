@@ -37,11 +37,27 @@ VM_IP="<vm-private-ip>"                   # Private IP of the VM
 SSH_KEY="~/.ssh/id_rsa"                   # SSH private key path on the deployer
 SSH_USER="azureadm"                        # SSH username
 
-# VM_INSTANCE drives disk naming offsets:
-#   VM_INSTANCE=1 -> DDB1, DDB2, cache1, jobs1
-#   VM_INSTANCE=2 -> DDB3, DDB4, cache2, jobs2
-#   VM_INSTANCE=3 -> DDB5, DDB6, cache3, jobs3
-VM_INSTANCE=1
+# VM_INSTANCE is set via --instance flag at runtime (required)
+# Do NOT hardcode - must be passed explicitly to avoid naming conflicts
+#   --instance 1  ->  DDB1, DDB2, cache1, jobs1
+#   --instance 2  ->  DDB3, DDB4, cache2, jobs2
+VM_INSTANCE=""
+
+# Parse --instance flag
+for arg in "$@"; do
+    case $arg in
+        --instance=*) VM_INSTANCE="${arg#*=}" ;;
+        --instance)   shift; VM_INSTANCE="$1" ;;
+    esac
+done
+
+if [[ -z "$VM_INSTANCE" ]]; then
+    echo "ERROR: --instance is required"
+    echo "  Usage: $0 --instance <number>"
+    echo "  Example: $0 --instance 1   (DDB1, DDB2, cache1, jobs1)"
+    echo "           $0 --instance 2   (DDB3, DDB4, cache2, jobs2)"
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # Disk layout - Commvault MediaAgent
@@ -112,7 +128,7 @@ declare -A ASSIGNED_LUNS
 # -----------------------------------------------------------------------------
 for config in "${DISK_CONFIGS[@]}"; do
     IFS=':' read -r DISK_SUFFIX SIZE_GB LUN CACHING VG LV MOUNT <<< "$config"
-    DISK_NAME="${VM_NAME}-${DISK_SUFFIX}"
+    DISK_NAME="${DISK_SUFFIX}"
 
     # Find a free LUN (skips any already in use)
     FREE_LUN=$(next_free_lun "$LUN")
@@ -194,11 +210,10 @@ for VG in "${!VG_DEVICES[@]}"; do
     REMOTE_SCRIPT+="lvcreate -l ${LVPCT}%FREE -n ${LV} ${VG}\n"
     REMOTE_SCRIPT+="mkfs.${FILESYSTEM} /dev/${VG}/${LV}\n"
     REMOTE_SCRIPT+="mkdir -p ${MOUNT}\n"
-    REMOTE_SCRIPT+="UUID=\$(blkid -s UUID -o value /dev/${VG}/${LV})\n"
     REMOTE_SCRIPT+="if grep -q ' ${MOUNT} ' /etc/fstab; then\n"
     REMOTE_SCRIPT+="  echo 'WARNING: fstab entry for ${MOUNT} already exists - skipping fstab update'\n"
     REMOTE_SCRIPT+="else\n"
-    REMOTE_SCRIPT+="  echo \"UUID=\${UUID}  ${MOUNT}  ${FILESYSTEM}  defaults,nofail  0  2\" >> /etc/fstab\n"
+    REMOTE_SCRIPT+="  echo \"/dev/mapper/${VG}-${LV}  ${MOUNT}  ${FILESYSTEM}  defaults,_netdev  0  0\" >> /etc/fstab\n"
     REMOTE_SCRIPT+="fi\n"
 done
 
