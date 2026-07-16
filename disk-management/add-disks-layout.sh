@@ -5,12 +5,16 @@
 # and mounts with fstab persistence.
 #
 # Disk config format (one entry per disk):
-#   "DISK_SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT"
+#   "DISK_SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT[:LV_PCT]"
 #
 # Caching values: ReadOnly | None | ReadWrite
 #   ReadOnly  - recommended for data disks
 #   None      - recommended for log/write-heavy disks
 #   ReadWrite - OS disk only (avoid for data disks)
+#
+# LV_PCT (optional, default: 100): percentage of VG free space to allocate
+#   to the logical volume. Set below 100 to leave headroom in the VG.
+#   Example: 85 creates an LV using 85%FREE, leaving ~15% free in the VG.
 #
 # For striped LVM (multiple disks -> one mount point), give them the SAME
 # VG_NAME and MOUNT_POINT - the script will add all matching disks to that VG.
@@ -33,26 +37,31 @@ VM_IP="<vm-private-ip>"                   # Private IP of the VM
 SSH_KEY="~/.ssh/id_rsa"                   # SSH private key path on the deployer
 SSH_USER="azureadm"                        # SSH username
 
-# -----------------------------------------------------------------------------
-# Disk layout - based on target layout:
-#   LUN 0 : DDB1  - 32 GiB  - database data (striped with DDB2)
-#   LUN 1 : DDB2  - 32 GiB  - database data (striped with DDB1)
-#   LUN 2 : cache - 32 GiB  - cache
-#   LUN 3 : jobs  - 32 GiB  - jobs/work
-#
-# Format: "NAME_SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT"
-# Disks sharing the same VG_NAME will be striped into one logical volume.
-# -----------------------------------------------------------------------------
-DISK_CONFIGS=(
-    "DDB1:32:1:ReadOnly:vg_dbdata:lv_dbdata:/db/data"
-    "DDB2:32:2:ReadOnly:vg_dbdata:lv_dbdata:/db/data"
-    "cache:32:3:ReadOnly:vg_cache:lv_cache:/db/cache"
-    "jobs:32:4:None:vg_jobs:lv_jobs:/db/work"
-)
+# VM_INSTANCE drives disk naming offsets:
+#   VM_INSTANCE=1 -> DDB1, DDB2, cache1, jobs1
+#   VM_INSTANCE=2 -> DDB3, DDB4, cache2, jobs2
+#   VM_INSTANCE=3 -> DDB5, DDB6, cache3, jobs3
+VM_INSTANCE=1
 
-MOUNT_POINT="/data"                       # e.g. /hana/data, /usr/sap, /sapmnt
-VG_NAME="vg_data"                         # LVM volume group name
-LV_NAME="lv_data"                         # LVM logical volume name
+# -----------------------------------------------------------------------------
+# Disk layout - Commvault MediaAgent
+#   DDB disks: DDB{(VM_INSTANCE-1)*2+1} and DDB{(VM_INSTANCE-1)*2+2}  -> /ddb01 (striped, 85%FREE)
+#   cache disk: cache{VM_INSTANCE}                                      -> /indexcache
+#   jobs disk:  jobs{VM_INSTANCE}                                       -> /opt/commvault
+#
+# Format: "NAME_SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT[:LV_PCT]"
+# Disks sharing the same VG_NAME will be striped into one logical volume.
+# LV_PCT defaults to 100 if omitted. Set to 85 to leave >=15% free in the VG.
+# -----------------------------------------------------------------------------
+DDB_START=$(( (VM_INSTANCE - 1) * 2 + 1 ))
+DDB_END=$(( DDB_START + 1 ))
+
+DISK_CONFIGS=(
+    "DDB${DDB_START}:1024:1:None:vg_ddb01:lv_ddb01:/ddb01:85"
+    "DDB${DDB_END}:1024:2:None:vg_ddb01:lv_ddb01:/ddb01:85"
+    "cache${VM_INSTANCE}:2048:3:None:vg_indexcache:lv_indexcache:/indexcache:100"
+    "jobs${VM_INSTANCE}:128:4:ReadOnly:vg_commvault:lv_commvault:/opt/commvault:100"
+)
 
 # Optional: UltraSSD only - leave empty for Premium_LRS
 DISK_IOPS_RW=""
@@ -158,13 +167,15 @@ sleep 15
 declare -A VG_DEVICES
 declare -A VG_LV
 declare -A VG_MOUNT
+declare -A VG_LVPCT
 
 for config in "${DISK_CONFIGS[@]}"; do
-    IFS=':' read -r DISK_SUFFIX SIZE_GB LUN CACHING VG LV MOUNT <<< "$config"
+    IFS=':' read -r DISK_SUFFIX SIZE_GB LUN CACHING VG LV MOUNT LV_PCT <<< "$config"
     ACTUAL_LUN="${ASSIGNED_LUNS[$DISK_SUFFIX]}"
     VG_DEVICES[$VG]+="/dev/disk/azure/scsi1/lun${ACTUAL_LUN} "
     VG_LV[$VG]="$LV"
     VG_MOUNT[$VG]="$MOUNT"
+    VG_LVPCT[$VG]="${LV_PCT:-100}"
 done
 
 # Build remote script string
@@ -175,11 +186,12 @@ for VG in "${!VG_DEVICES[@]}"; do
     LV="${VG_LV[$VG]}"
     MOUNT="${VG_MOUNT[$VG]}"
     DEVS="${VG_DEVICES[$VG]}"
-    REMOTE_SCRIPT+="echo '--- Configuring ${VG} -> ${MOUNT} ---'\n"
+    LVPCT="${VG_LVPCT[$VG]}"
+    REMOTE_SCRIPT+="echo '--- Configuring ${VG} -> ${MOUNT} (LV size: ${LVPCT}%FREE) ---'\n"
     REMOTE_SCRIPT+="DEVICES=\"${DEVS}\"\n"
     REMOTE_SCRIPT+="pvcreate \$DEVICES\n"
     REMOTE_SCRIPT+="vgcreate ${VG} \$DEVICES\n"
-    REMOTE_SCRIPT+="lvcreate -l 100%FREE -n ${LV} ${VG}\n"
+    REMOTE_SCRIPT+="lvcreate -l ${LVPCT}%FREE -n ${LV} ${VG}\n"
     REMOTE_SCRIPT+="mkfs.${FILESYSTEM} /dev/${VG}/${LV}\n"
     REMOTE_SCRIPT+="mkdir -p ${MOUNT}\n"
     REMOTE_SCRIPT+="UUID=\$(blkid -s UUID -o value /dev/${VG}/${LV})\n"

@@ -133,19 +133,30 @@ For complex layouts with mixed disk sizes, names, and multiple volume groups (e.
 **Config format:**
 ```bash
 DISK_CONFIGS=(
-    "SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT"
+    "SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT[:LV_PCT]"
 )
 
-# Example:
+# Example (Commvault MediaAgent — VM instance 1):
+# VM_INSTANCE=1  ->  DDB1, DDB2, cache1, jobs1
+# VM_INSTANCE=2  ->  DDB3, DDB4, cache2, jobs2
 DISK_CONFIGS=(
-    "DDB1:1250:1:ReadOnly:vg_dbdata:lv_dbdata:/db/data"
-    "DDB2:1250:2:ReadOnly:vg_dbdata:lv_dbdata:/db/data"  # same VG = striped
-    "cache:2048:3:ReadOnly:vg_cache:lv_cache:/db/cache"
-    "jobs:128:4:None:vg_jobs:lv_jobs:/db/work"
+    "DDB1:1024:1:None:vg_ddb01:lv_ddb01:/ddb01:85"       # 85%FREE = >=15% VFree
+    "DDB2:1024:2:None:vg_ddb01:lv_ddb01:/ddb01:85"       # same VG = striped
+    "cache1:2048:3:None:vg_indexcache:lv_indexcache:/indexcache:100"
+    "jobs1:128:4:ReadOnly:vg_commvault:lv_commvault:/opt/commvault:100"
 )
 ```
 
-> Disks sharing the same `VG_NAME` are automatically striped into one logical volume.
+**`LV_PCT` field (optional, default: 100):**  
+Sets the percentage of VG free space allocated to the logical volume. Use this to reserve headroom — e.g. `85` creates the LV at `85%FREE`, leaving ~15% free in the VG (useful for deduplication databases that require minimum free space).
+
+**`VM_INSTANCE` variable:**  
+Controls disk naming offsets when the same layout is deployed to multiple VMs. Set at the top of the script before running:
+```bash
+VM_INSTANCE=1   # DDB1, DDB2, cache1, jobs1
+VM_INSTANCE=2   # DDB3, DDB4, cache2, jobs2
+VM_INSTANCE=15  # DDB29, DDB30, cache15, jobs15
+```
 
 ---
 
@@ -154,23 +165,23 @@ DISK_CONFIGS=(
 | Disk purpose | Recommended caching |
 |---|---|
 | OS disk | `ReadWrite` |
-| HANA data | `ReadOnly` |
-| HANA log | `None` |
-| HANA shared | `ReadOnly` |
-| `/usr/sap` | `ReadOnly` |
+| Read-heavy (data, install dirs) | `ReadOnly` |
+| Write-heavy (logs, DDB, index cache) | `None` |
 | Backup | `None` |
 
 ## LUN Assignment
 
-All scripts automatically detect which LUNs are already in use on the VM and skip them. The `--lun-start` parameter sets the preferred starting point — use different ranges for different disk groups to keep layouts predictable:
+All scripts automatically detect which LUNs are already in use on the VM and skip them. The preferred LUN in each `DISK_CONFIGS` entry (or `--lun-start` in `add-disks-param.sh`) is treated as a hint — if already taken the next free LUN is used automatically.
 
-| Disk group | Suggested `--lun-start` |
-|---|---|
-| `/hana/data` | `0` |
-| `/hana/log` | `10` |
-| `/hana/shared` | `20` |
-| `/usr/sap` | `30` |
-| Backup | `40` |
+For `add-disks-layout.sh`, LUNs are defined per entry in `DISK_CONFIGS`. For `add-disks-param.sh`, use `--lun-start` to set the starting LUN for a group of uniform disks and avoid conflicts with other groups:
+
+```bash
+# First disk group starting at LUN 0
+./add-disks-param.sh ... --lun-start 0 --suffix data
+
+# Second disk group starting at LUN 10 (leaves room for expansion of first group)
+./add-disks-param.sh ... --lun-start 10 --suffix log --caching None
+```
 
 ## Prerequisites
 
