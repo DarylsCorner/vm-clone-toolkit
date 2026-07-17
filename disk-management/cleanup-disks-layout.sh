@@ -45,15 +45,15 @@ done
 if [[ -z "$VM_INSTANCE" ]]; then
     echo "ERROR: --instance is required"
     echo "  Usage: $0 --instance <number>"
-    echo "  Example: $0 --instance 1   (removes DDB1, DDB2, cache1, jobs1)"
-    echo "           $0 --instance 2   (removes DDB3, DDB4, cache2, jobs2)"
+    echo "  Example: $0 --instance 0   (removes DDB1, DDB2, cache0, jobs0)"
+    echo "           $0 --instance 1   (removes DDB3, DDB4, cache1, jobs1)"
     exit 1
 fi
 
 # =============================================================================
 # Derive disk names and VGs from instance number
 # =============================================================================
-DDB_START=$(( (VM_INSTANCE - 1) * 2 + 1 ))
+DDB_START=$(( VM_INSTANCE * 2 + 1 ))
 DDB_END=$(( DDB_START + 1 ))
 
 DISKS=("DDB${DDB_START}" "DDB${DDB_END}" "cache${VM_INSTANCE}" "jobs${VM_INSTANCE}")

@@ -39,8 +39,9 @@ SSH_USER="azureadm"                        # SSH username
 
 # VM_INSTANCE is set via --instance flag at runtime (required)
 # Do NOT hardcode - must be passed explicitly to avoid naming conflicts
-#   --instance 1  ->  DDB1, DDB2, cache1, jobs1
-#   --instance 2  ->  DDB3, DDB4, cache2, jobs2
+#   --instance 0  ->  DDB1, DDB2, cache0, jobs0
+#   --instance 1  ->  DDB3, DDB4, cache1, jobs1
+#   --instance 2  ->  DDB5, DDB6, cache2, jobs2
 VM_INSTANCE=""
 
 # Parse --instance flag
@@ -54,22 +55,22 @@ done
 if [[ -z "$VM_INSTANCE" ]]; then
     echo "ERROR: --instance is required"
     echo "  Usage: $0 --instance <number>"
-    echo "  Example: $0 --instance 1   (DDB1, DDB2, cache1, jobs1)"
-    echo "           $0 --instance 2   (DDB3, DDB4, cache2, jobs2)"
+    echo "  Example: $0 --instance 0   (DDB1, DDB2, cache0, jobs0)"
+    echo "           $0 --instance 1   (DDB3, DDB4, cache1, jobs1)"
     exit 1
 fi
 
 # -----------------------------------------------------------------------------
 # Disk layout - Commvault MediaAgent
-#   DDB disks: DDB{(VM_INSTANCE-1)*2+1} and DDB{(VM_INSTANCE-1)*2+2}  -> /ddb01 (striped, 85%FREE)
-#   cache disk: cache{VM_INSTANCE}                                      -> /indexcache
-#   jobs disk:  jobs{VM_INSTANCE}                                       -> /opt/commvault
+#   DDB disks: DDB{VM_INSTANCE*2+1} and DDB{VM_INSTANCE*2+2}  -> /ddb01 (striped, 85%FREE)
+#   cache disk: cache{VM_INSTANCE}                             -> /indexcache
+#   jobs disk:  jobs{VM_INSTANCE}                              -> /opt/commvault
 #
 # Format: "NAME_SUFFIX:SIZE_GB:LUN:CACHING:VG_NAME:LV_NAME:MOUNT_POINT[:LV_PCT]"
 # Disks sharing the same VG_NAME will be striped into one logical volume.
 # LV_PCT defaults to 100 if omitted. Set to 85 to leave >=15% free in the VG.
 # -----------------------------------------------------------------------------
-DDB_START=$(( (VM_INSTANCE - 1) * 2 + 1 ))
+DDB_START=$(( VM_INSTANCE * 2 + 1 ))
 DDB_END=$(( DDB_START + 1 ))
 
 DISK_CONFIGS=(

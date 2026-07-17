@@ -127,8 +127,8 @@ For complex layouts with mixed disk sizes, names, and multiple volume groups (e.
 
 ```bash
 # --instance is required — controls disk naming offsets
-./add-disks-layout.sh --instance 1   # DDB1, DDB2, cache1, jobs1
-./add-disks-layout.sh --instance 2   # DDB3, DDB4, cache2, jobs2
+./add-disks-layout.sh --instance 0   # DDB1, DDB2, cache0, jobs0
+./add-disks-layout.sh --instance 1   # DDB3, DDB4, cache1, jobs1
 ```
 
 > `--instance` is a required runtime flag to prevent accidental disk name collisions when deploying the same layout to multiple VMs.
@@ -156,9 +156,9 @@ Sets the percentage of VG free space allocated to the logical volume. Use this t
 **`--instance` flag (required at runtime):**  
 Controls disk naming offsets when the same layout is deployed to multiple VMs. Must be passed on the command line — not hardcoded — to prevent accidental naming conflicts:
 ```bash
-./add-disks-layout.sh --instance 1   # DDB1, DDB2, cache1, jobs1
-./add-disks-layout.sh --instance 2   # DDB3, DDB4, cache2, jobs2
-./add-disks-layout.sh --instance 15  # DDB29, DDB30, cache15, jobs15
+./add-disks-layout.sh --instance 0   # DDB1, DDB2, cache0, jobs0
+./add-disks-layout.sh --instance 1   # DDB3, DDB4, cache1, jobs1
+./add-disks-layout.sh --instance 14  # DDB29, DDB30, cache14, jobs14
 ```
 
 ---
@@ -169,8 +169,8 @@ Unmounts filesystems, removes LVM (LVs, VGs, PVs, device-mapper), cleans fstab, 
 
 ```bash
 # Set VM_NAME, RESOURCE_GROUP, VM_IP, SSH_KEY at the top, then:
-./cleanup-disks-layout.sh --instance 1   # removes DDB1, DDB2, cache1, jobs1
-./cleanup-disks-layout.sh --instance 2   # removes DDB3, DDB4, cache2, jobs2
+./cleanup-disks-layout.sh --instance 0   # removes DDB1, DDB2, cache0, jobs0
+./cleanup-disks-layout.sh --instance 1   # removes DDB3, DDB4, cache1, jobs1
 ```
 
 ---
