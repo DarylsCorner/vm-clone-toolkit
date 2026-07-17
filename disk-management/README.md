@@ -163,7 +163,17 @@ Controls disk naming offsets when the same layout is deployed to multiple VMs. M
 
 ---
 
-## Caching Reference
+### 4. `cleanup-disks-layout.sh` — Reverse of `add-disks-layout.sh`
+
+Unmounts filesystems, removes LVM (LVs, VGs, PVs, device-mapper), cleans fstab, then detaches and deletes the Azure disks. Use `--instance` matching the value used during add.
+
+```bash
+# Set VM_NAME, RESOURCE_GROUP, VM_IP, SSH_KEY at the top, then:
+./cleanup-disks-layout.sh --instance 1   # removes DDB1, DDB2, cache1, jobs1
+./cleanup-disks-layout.sh --instance 2   # removes DDB3, DDB4, cache2, jobs2
+```
+
+---
 
 | Disk purpose | Recommended caching |
 |---|---|

@@ -80,6 +80,7 @@ Scripts for attaching and configuring additional data disks on existing Azure Li
 - **`add-disks-simple.sh`** — Quick disk attach with no LVM (raw disks, let the OS/Ansible configure)
 - **`add-disks-param.sh`** — Parameterised attach + automated LVM, filesystem, and `/etc/fstab` via SSH
 - **`add-disks-layout.sh`** — Predefined multi-disk layout with mixed sizes and multiple volume groups
+- **`cleanup-disks-layout.sh`** — Reverses `add-disks-layout.sh`: unmounts, removes LVM, detaches and deletes Azure disks. Takes `--instance` to target the correct disk set.
 
 Key features: auto LUN conflict detection, availability zone awareness, LVM striping across multiple disks, fstab protection.
 
@@ -126,6 +127,7 @@ vm-clone-toolkit/
 │   ├── add-disks-simple.sh      # Quick disk attach (no LVM)
 │   ├── add-disks-param.sh       # Parameterised LVM + auto-mount
 │   ├── add-disks-layout.sh      # Predefined multi-disk layout
+│   ├── cleanup-disks-layout.sh  # Reverses add-disks-layout.sh
 │   └── README.md
 └── README.md
 ```
