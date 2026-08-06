@@ -34,6 +34,10 @@ SSH_USER="azureadm"
 # Filesystem type on the DDB volumes
 FILESYSTEM="xfs"
 
+# Percentage of VG to allocate to the LV (must match add-disks-layout.sh)
+# 85 = leave ~15% free in the VG
+LV_PCT=85
+
 # =============================================================================
 # ARGUMENT PARSING
 # =============================================================================
@@ -127,9 +131,9 @@ for DISK in "${DISK_NAMES[@]}"; do
     REMOTE_SCRIPT+="pvresize \$(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk '\$2==\"${VG_NAME}\" {print \$1}')\n"
 done
 
-# Extend the LV to use all free space in the VG
-REMOTE_SCRIPT+="echo '--- Extending LV to 100%FREE ---'\n"
-REMOTE_SCRIPT+="lvextend -l +100%FREE /dev/${VG_NAME}/${LV_NAME}\n"
+# Extend the LV using LV_PCT of free space (preserves headroom in VG)
+REMOTE_SCRIPT+="echo '--- Extending LV to ${LV_PCT}%FREE ---'\n"
+REMOTE_SCRIPT+="lvextend -l ${LV_PCT}%VG /dev/${VG_NAME}/${LV_NAME}\n"
 
 # Grow the filesystem
 if [[ "$FILESYSTEM" == "xfs" ]]; then

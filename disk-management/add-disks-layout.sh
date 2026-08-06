@@ -26,15 +26,15 @@ set -euo pipefail
 # PARAMETERS - Modify these before running
 # =============================================================================
 
-VM_NAME="<vm-name>"
-RESOURCE_GROUP="<resource-group>"
-LOCATION="<location>"                     # e.g. swedencentral
+VM_NAME="VM-name"
+RESOURCE_GROUP="RG-name"
+LOCATION="swedencentral"                     # e.g. swedencentral
 DISK_SKU="Premium_LRS"
 FILESYSTEM="xfs"
 
 # SSH connection to the VM for automated LVM configuration
-VM_IP="<vm-private-ip>"                   # Private IP of the VM
-SSH_KEY="~/.ssh/id_rsa"                   # SSH private key path on the deployer
+VM_IP="add-your-IP"                   # Private IP of the VM
+SSH_KEY="add-your-key"                   # SSH private key path on the deployer
 SSH_USER="azureadm"                        # SSH username
 
 # VM_INSTANCE is set via --instance flag at runtime (required)
