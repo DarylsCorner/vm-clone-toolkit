@@ -62,7 +62,7 @@ fi
 
 # -----------------------------------------------------------------------------
 # Disk layout - Commvault MediaAgent
-#   DDB disks: DDB{VM_INSTANCE*2+1} and DDB{VM_INSTANCE*2+2}  -> /ddb01 (striped, 85%FREE)
+#   DDB disks: DDB{VM_INSTANCE*2+1} and DDB{VM_INSTANCE*2+2}  -> /ddb01 (striped, 85%FREE, 2x1250GB = ~2.1TB usable)
 #   cache disk: cache{VM_INSTANCE}                             -> /indexcache
 #   jobs disk:  jobs{VM_INSTANCE}                              -> /opt/commvault
 #
@@ -74,8 +74,8 @@ DDB_START=$(( VM_INSTANCE * 2 + 1 ))
 DDB_END=$(( DDB_START + 1 ))
 
 DISK_CONFIGS=(
-    "DDB${DDB_START}:1024:1:None:vg_ddb01:lv_ddb01:/ddb01:85"
-    "DDB${DDB_END}:1024:2:None:vg_ddb01:lv_ddb01:/ddb01:85"
+    "DDB${DDB_START}:1250:1:None:vg_ddb01:lv_ddb01:/ddb01:85"
+    "DDB${DDB_END}:1250:2:None:vg_ddb01:lv_ddb01:/ddb01:85"
     "cache${VM_INSTANCE}:2048:3:None:vg_indexcache:lv_indexcache:/indexcache:100"
     "jobs${VM_INSTANCE}:128:4:ReadOnly:vg_commvault:lv_commvault:/opt/commvault:100"
 )
