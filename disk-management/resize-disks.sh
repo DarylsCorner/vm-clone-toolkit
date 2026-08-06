@@ -45,12 +45,13 @@ LV_PCT=85
 VM_INSTANCE=""
 NEW_SIZE_GB=""
 
-for arg in "$@"; do
-    case $arg in
-        --instance=*) VM_INSTANCE="${arg#*=}" ;;
-        --instance)   shift; VM_INSTANCE="$1" ;;
-        --size-gb=*)  NEW_SIZE_GB="${arg#*=}" ;;
-        --size-gb)    shift; NEW_SIZE_GB="$1" ;;
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --instance=*) VM_INSTANCE="${1#*=}"; shift ;;
+        --instance)   VM_INSTANCE="$2"; shift 2 ;;
+        --size-gb=*)  NEW_SIZE_GB="${1#*=}"; shift ;;
+        --size-gb)    NEW_SIZE_GB="$2"; shift 2 ;;
+        *) shift ;;
     esac
 done
 
